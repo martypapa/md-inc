@@ -1,0 +1,4 @@
+open_tag = "<!--|"
+close_tag = "|-->"
+base_dir = "include"
+files = []

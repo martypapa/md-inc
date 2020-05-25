@@ -1,0 +1,5 @@
+open_tag = "<!--("
+close_tag = ")-->"
+end_command = ""
+base_dir = "include_dir"
+files = ["short_3.md"]

@@ -1,0 +1,4 @@
+files = ["README.md"]
+base_dir = "doc"
+open_tag = "<!--{{"
+close_tag = "}}-->"
