@@ -18,6 +18,7 @@ pub struct Config {
     pub end_command: String,
     pub base_dir: String,
     pub files: Vec<String>,
+    pub next_dirs: Vec<String>,
 }
 
 impl Default for Config {
@@ -28,6 +29,7 @@ impl Default for Config {
             end_command: DEFAULT_END_COMMAND.to_string(),
             base_dir: "".to_string(),
             files: vec![],
+            next_dirs: vec![],
         }
     }
 }
@@ -50,6 +52,17 @@ impl Config {
             self.files.iter().map(|x| dir.join(x)).collect(),
         )
     }
+    /// Returns None if no file exists
+    /// Returns Some(Err) if file exists, but there was a problem reading it
+    pub(crate) fn try_from_dir<P: Into<PathBuf>>(dir: P) -> Result<Option<Self>> {
+        let dir = dir.into();
+        let file = dir.join(".md-inc.toml");
+        if file.exists() && file.is_file() {
+            Ok(Some(Config::try_from_path(file)?))
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -69,18 +82,6 @@ impl OutputTo {
             read_only: false,
             print: false,
         }
-    }
-}
-
-/// Returns None if no file exists
-/// Returns Some(Err) if file exists, but there was a problem reading it
-pub(crate) fn find_config<P: Into<PathBuf>>(dir: P) -> Result<Option<(ParserConfig, Vec<PathBuf>)>> {
-    let dir = dir.into();
-    let file = dir.join(".md-inc.toml");
-    if file.exists() && file.is_file() {
-        Ok(Some(Config::try_from_path(file)?.into_parser(&dir)))
-    } else {
-        Ok(None)
     }
 }
 

@@ -1,7 +1,6 @@
 use crate::parse::{transform, Command, Parser, ParserConfig};
 use crate::{transform_files_with_args, Args};
 use std::path::Path;
-use crate::config;
 use crate::config::Config;
 
 #[test]
@@ -96,7 +95,7 @@ fn read_config_found() {
         .join("with_include");
 
     println!("DIR: {}", &dir.to_str().unwrap());
-    let (cfg, _files) = config::find_config(&dir).unwrap().unwrap();
+    let (cfg, _files) = Config::try_from_dir(&dir).unwrap().unwrap().into_parser(&dir);
     assert_eq!(cfg.base_dir, dir.join("include"));
 }
 #[test]
@@ -106,7 +105,7 @@ fn read_config_none() {
         .join("test_helpers")
         .join("no_include");
     println!("DIR: {}", &dir.to_str().unwrap());
-    let cfg = config::find_config(&dir);
+    let cfg = Config::try_from_dir(&dir);
     assert!(matches!(cfg, Ok(None)));
 }
 
@@ -166,6 +165,7 @@ fn process_config_correct() {
             end_command: "end".to_string(),
             base_dir: "include".to_string(),
             files: vec!["file".to_string()],
+            next_dirs: vec![],
         }.into_parser(&Path::new("root").to_path_buf());
     assert_eq!(
         files.first().unwrap().as_path(),

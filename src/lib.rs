@@ -65,18 +65,18 @@ pub struct Args {
     base_dir: Option<PathBuf>,
 
     ///
-    /// Override the working directory. Used to locate the '.md-inc.toml' file
+    /// Set 1 or more working directories that may contain a '.md-inc.toml' config file.
     ///
     #[structopt(
         short = "d",
         long = "dir",
         parse(from_os_str),
-        help = "Working directory"
+        help = "Working directories"
     )]
-    working_dir: Option<PathBuf>,
+    working_dir: Vec<PathBuf>,
 
     ///
-    /// Ignore automatic detection of '.md-inc.toml' files in the working directory
+    /// Ignore automatic detection of '.md-inc.toml' config files in the working directory
     ///
     #[structopt(
         short,
@@ -114,9 +114,9 @@ pub struct Args {
     #[structopt(
         short = "g",
         long = "glob",
-        help = "A custom glob used to match config files"
+        help = "Custom globs used to match config files"
     )]
-    glob: Option<String>,
+    glob: Vec<String>,
 
     ///
     /// Prints the transformed files to stdout
@@ -129,40 +129,47 @@ pub struct Args {
 /// Transforms a list of input files
 ///
 /// # Returns
-/// A Result containing the transformed input
+/// A Result containing the transformed input and vec of directories to also check
 ///
 /// # Parameters
 /// * `args` An struct of configuration settings.
 ///
+///
 pub fn transform_files_with_args(args: Args) -> Result<Vec<String>> {
-    if let Some(x) = args.working_dir {
+    Ok(transform_files_with_args_and_next(args)?.0)
+}
+pub (crate) fn transform_files_with_args_and_next(args: Args) -> Result<(Vec<String>, Vec<PathBuf>)> {
+    let mut next_dirs = vec![];
+    if let Some(x) = args.working_dir.first() {
         if x.exists() {
             std::env::set_current_dir(&x)
                 .with_context(|| format!("Could not set working directory: {:?}", &x))?;
         }
     }
     let (mut parser, files) = if let Some(config) = args.config {
-        println!("Found config");
         let f = read_to_string(&config).with_context(|| format!("Reading {:?}", &config))?;
+        let cfg =
         toml::from_str::<Config>(&f)
-            .with_context(|| format!("Error reading toml config file: '{}'", &f))
-            // Set the base directory to the one containing the config file
-            .map(|x| -> Result<_> {
-                let dir = config
-                    .parent()
-                    .context("No parent directory")?
-                    .to_path_buf();
-                Ok(x.into_parser(&dir))
-            })??
+            .with_context(|| format!("Error reading toml config file: '{}'", &f))?;
+        println!("Next dirs = {:?}", &cfg.next_dirs);
+        let dir = config.parent()
+            .context("No parent directory")?
+            .to_path_buf();
+        next_dirs = cfg.next_dirs.iter().map(|x| dir.join(x)).collect();
+        cfg.into_parser(&dir)
     } else if args.ignore_config {
         (ParserConfig::default(), args.files)
     } else {
         // Find '.md-inc.toml' in the input file directory
         let dir = current_dir()?;
-        match config::find_config(dir)? {
-            Some((parser, mut files)) => {
+        let cfg = Config::try_from_dir(&dir)?;
+
+        match cfg {
+            Some(x) => {
+                next_dirs = x.next_dirs.iter().map(|x| dir.join(x)).collect();
+                let (parser, mut files) = x.into_parser(&dir);
                 if !args.files.is_empty() {
-                    files = args.files
+                    files = args.files.clone();
                 }
                 (parser, files)
             }
@@ -189,7 +196,7 @@ pub fn transform_files_with_args(args: Args) -> Result<Vec<String>> {
             read_only: args.read_only,
             print: args.print,
         },
-    )
+    ).map(|x| (x, next_dirs))
 }
 
 ///
@@ -217,19 +224,20 @@ pub fn transform_files<P: AsRef<Path>>(
         .iter()
         .map(|file| {
             let file = file.as_ref();
+            print!(" {}", &file.to_str().unwrap_or_default());
             let file_parser = Parser::new(parser.clone(), read_to_string(file.clone())?);
             let res = file_parser.parse()?;
             if !read_only {
                 if res != file_parser.content {
                     let mut f = File::create(file.clone())?;
                     f.write_all(res.as_bytes())?;
-                    println!("Updated {}", file.to_str().unwrap())
+                    println!(" [[Updated!]]")
                 } else {
-                    println!("No changes for {}", file.to_str().unwrap());
+                    println!(" [[No changes]]");
                 }
             }
             if print {
-                println!("{}", res);
+                println!("\n{}", res);
             }
             Ok(res)
         })
@@ -246,27 +254,45 @@ pub fn transform_files<P: AsRef<Path>>(
 /// Similarly, any fields in the config file will be overridden if also set in `args`.
 ///
 pub fn walk_transform(mut args: Args) -> Result<Vec<Vec<String>>> {
-    if let Some(x) = &args.working_dir {
+    if let Some(x) = &args.working_dir.first() {
         std::env::set_current_dir(x)?;
     }
-    let subdirs: Vec<PathBuf> = if args.recursive {
+    let mut subdirs: Vec<PathBuf> = args.working_dir.clone();
+    if args.recursive {
         args.recursive = false;
-        glob::glob(args.glob.as_ref().map(|x| x.as_str()).unwrap_or("**/.md-inc.toml"))
+        let find_glob = |g|glob::glob(g)
             .expect("Failed to read glob pattern")
             .filter_map(|path| path.ok().and_then(|x| x.parent().map(|x| x.to_path_buf())))
-            .collect()
-    } else {
-        vec![]
-    };
-    if subdirs.is_empty() {
-        Ok(vec![transform_files_with_args(args)?])
-    } else {
-        subdirs
-            .into_iter()
-            .map(|x| {
-                args.working_dir = Some(x);
-                transform_files_with_args(args.clone())
-            })
-            .collect::<Result<Vec<_>>>()
+            .collect::<Vec<_>>();
+        if args.glob.is_empty() {
+            subdirs.append(&mut find_glob("**/.md-inc.toml"));
+        }
+        for g in &args.glob {
+            subdirs.append(&mut find_glob(g.as_str()));
+        }
+        if subdirs.is_empty() {
+            return Err(anyhow::anyhow!("Did not find any matches for globs"));
+        }
     }
+
+    let (mut res, next_dirs) = if subdirs.is_empty() {
+        let (res, next) = transform_files_with_args_and_next(args.clone())?;
+        (vec![res], next)
+    } else {
+        let mut next_dirs = vec![];
+        let mut res = vec![];
+        for x in subdirs {
+            println!(">> {}", x.to_str().unwrap_or_default());
+            args.working_dir = vec![x];
+            let (out, mut next) = transform_files_with_args_and_next(args.clone())?;
+            next_dirs.append(&mut next);
+            res.push(out);
+        }
+        (res, next_dirs)
+    };
+    for n in next_dirs {
+        args.working_dir = vec![n];
+        res.push(transform_files_with_args(args.clone())?);
+    }
+    Ok(res)
 }
