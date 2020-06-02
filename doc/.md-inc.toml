@@ -1,1 +1,12 @@
-files = ["markdown-example-filled.md"]
+out_dir = "after"
+
+files = [
+    "before/basic_example.md",
+    "before/wrap_code.md",
+    "before/trim_leading.md",
+    "before/trim_trailing.md",
+    "before/trim_both.md",
+    "before/line_list.md",
+    "before/match.md",
+    "before/line_numbers.md",
+]

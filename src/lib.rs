@@ -6,17 +6,21 @@ use std::fs::{read_to_string, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 pub use structopt::StructOpt;
-mod parse;
 mod config;
-pub use crate::{config::{OutputTo, Config}, parse::{ParserConfig}};
+mod parse;
+use crate::config::ConfigAndPath;
 use crate::parse::Parser;
+pub use crate::{
+    config::{Config, OutputTo},
+    parse::ParserConfig,
+};
 
 #[cfg(test)]
 mod test;
 
 ///
 /// Include files in Markdown docs
-/// Can be generated from command-line arguments using `Args::from_args()` (uses the `StructOpt` trait)
+/// Can be after from command-line arguments using `Args::from_args()` (uses the `StructOpt` trait)
 ///
 #[derive(Debug, StructOpt, Default, Clone)]
 #[structopt(name = "md-inc", about = "Include files in Markdown docs")]
@@ -26,6 +30,13 @@ pub struct Args {
     ///
     #[structopt(parse(from_os_str))]
     files: Vec<PathBuf>,
+
+    ///
+    /// An optional path to output the generated file to.
+    /// If not present, the files will be inserted inline
+    ///
+    #[structopt(long = "out", parse(from_os_str))]
+    out_dir: Option<PathBuf>,
 
     ///
     /// Override the opening tag for a command block
@@ -135,48 +146,25 @@ pub struct Args {
 /// * `args` An struct of configuration settings.
 ///
 ///
-pub fn transform_files_with_args(args: Args) -> Result<Vec<String>> {
-    Ok(transform_files_with_args_and_next(args)?.0)
-}
-pub (crate) fn transform_files_with_args_and_next(args: Args) -> Result<(Vec<String>, Vec<PathBuf>)> {
-    let mut next_dirs = vec![];
+pub fn transform_files_with_args(args: Args, config: Option<ConfigAndPath>) -> Result<Vec<String>> {
+    let mut out_dir: Option<PathBuf> = None;
     if let Some(x) = args.working_dir.first() {
         if x.exists() {
             std::env::set_current_dir(&x)
                 .with_context(|| format!("Could not set working directory: {:?}", &x))?;
         }
     }
-    let (mut parser, files) = if let Some(config) = args.config {
-        let f = read_to_string(&config).with_context(|| format!("Reading {:?}", &config))?;
-        let cfg =
-        toml::from_str::<Config>(&f)
-            .with_context(|| format!("Error reading toml config file: '{}'", &f))?;
-        println!("Next dirs = {:?}", &cfg.next_dirs);
-        let dir = config.parent()
-            .context("No parent directory")?
-            .to_path_buf();
-        next_dirs = cfg.next_dirs.iter().map(|x| dir.join(x)).collect();
-        cfg.into_parser(&dir)
-    } else if args.ignore_config {
-        (ParserConfig::default(), args.files)
+    let (mut parser, files) = if let Some(cfg) = config {
+        let parent = cfg.parent_path()?;
+        out_dir = cfg.config.out_dir.as_ref().map(|x| parent.join(x));
+        cfg.into_parser()?
     } else {
-        // Find '.md-inc.toml' in the input file directory
-        let dir = current_dir()?;
-        let cfg = Config::try_from_dir(&dir)?;
-
-        match cfg {
-            Some(x) => {
-                next_dirs = x.next_dirs.iter().map(|x| dir.join(x)).collect();
-                let (parser, mut files) = x.into_parser(&dir);
-                if !args.files.is_empty() {
-                    files = args.files.clone();
-                }
-                (parser, files)
-            }
-            _ => (ParserConfig::default(), args.files),
-        }
+        (ParserConfig::default(), args.files)
     };
 
+    if let Some(x) = args.out_dir {
+        out_dir = Some(x);
+    }
     if let Some(x) = args.open_tag {
         parser.tags.opening = x;
     }
@@ -195,8 +183,9 @@ pub (crate) fn transform_files_with_args_and_next(args: Args) -> Result<(Vec<Str
         OutputTo {
             read_only: args.read_only,
             print: args.print,
+            out_dir,
         },
-    ).map(|x| (x, next_dirs))
+    )
 }
 
 ///
@@ -219,7 +208,7 @@ pub fn transform_files<P: AsRef<Path>>(
     files: &[P],
     prefs: OutputTo,
 ) -> Result<Vec<String>> {
-    let (read_only, print) = (prefs.read_only, prefs.print);
+    let (read_only, print, out_dir) = (prefs.read_only, prefs.print, prefs.out_dir);
     Ok(files
         .iter()
         .map(|file| {
@@ -228,12 +217,34 @@ pub fn transform_files<P: AsRef<Path>>(
             let file_parser = Parser::new(parser.clone(), read_to_string(file.clone())?);
             let res = file_parser.parse()?;
             if !read_only {
-                if res != file_parser.content {
-                    let mut f = File::create(file.clone())?;
-                    f.write_all(res.as_bytes())?;
-                    println!(" [[Updated!]]")
-                } else {
-                    println!(" [[No changes]]");
+                match &out_dir {
+                    Some(path) => {
+                        let mut path = path.clone();
+                        if path.is_dir() {
+                            let name = file.file_name().and_then(|x| x.to_str()).unwrap_or("out");
+                            path = path.join(name)
+                        }
+                        if path.is_file() {
+                            // Check if contents has changed
+                            let contents = read_to_string(&path)?;
+                            if contents == res {
+                                println!(" [[No changes]]");
+                                return Ok(res); // Next file
+                            }
+                        }
+                        let mut f = File::create(&path)?;
+                        f.write_all(res.as_bytes())?;
+                        println!(" [[Updated!]]")
+                    }
+                    _ => {
+                        if res != file_parser.content {
+                            let mut f = File::create(&file)?;
+                            f.write_all(res.as_bytes())?;
+                            println!(" [[Updated!]]")
+                        } else {
+                            println!(" [[No changes]]");
+                        }
+                    }
                 }
             }
             if print {
@@ -260,10 +271,12 @@ pub fn walk_transform(mut args: Args) -> Result<Vec<Vec<String>>> {
     let mut subdirs: Vec<PathBuf> = args.working_dir.clone();
     if args.recursive {
         args.recursive = false;
-        let find_glob = |g|glob::glob(g)
-            .expect("Failed to read glob pattern")
-            .filter_map(|path| path.ok().and_then(|x| x.parent().map(|x| x.to_path_buf())))
-            .collect::<Vec<_>>();
+        let find_glob = |g| {
+            glob::glob(g)
+                .expect("Failed to read glob pattern")
+                .filter_map(|path| path.ok().and_then(|x| x.parent().map(|x| x.to_path_buf())))
+                .collect::<Vec<_>>()
+        };
         if args.glob.is_empty() {
             subdirs.append(&mut find_glob("**/.md-inc.toml"));
         }
@@ -275,24 +288,59 @@ pub fn walk_transform(mut args: Args) -> Result<Vec<Vec<String>>> {
         }
     }
 
-    let (mut res, next_dirs) = if subdirs.is_empty() {
-        let (res, next) = transform_files_with_args_and_next(args.clone())?;
-        (vec![res], next)
+    let config: Option<ConfigAndPath> = if let Some(path) = &args.config {
+        Some(ConfigAndPath {
+            config: Config::try_from_path(&path)?,
+            path: path.to_path_buf(),
+        })
+    } else if !args.ignore_config {
+        Config::try_from_dir(current_dir()?)?
     } else {
-        let mut next_dirs = vec![];
+        None
+    };
+
+    let config = if let Some(x) = config {
+        let parent = x
+            .path
+            .parent()
+            .context("Directory of config file could not be determined")?;
+        if subdirs.is_empty() {
+            subdirs = vec![current_dir()?];
+        }
+        subdirs = x
+            .config
+            .depend_dirs
+            .iter()
+            .map(|x| parent.join(x))
+            .chain(subdirs.into_iter())
+            .chain(x.config.next_dirs.iter().map(|x| parent.join(x)))
+            .collect();
+        Some(x)
+    } else {
+        None
+    };
+
+    let res = if subdirs.is_empty() {
+        let res = transform_files_with_args(args.clone(), config.clone())?;
+        vec![res]
+    } else {
         let mut res = vec![];
         for x in subdirs {
             println!(">> {}", x.to_str().unwrap_or_default());
-            args.working_dir = vec![x];
-            let (out, mut next) = transform_files_with_args_and_next(args.clone())?;
-            next_dirs.append(&mut next);
-            res.push(out);
+            match &config {
+                Some(cfg) if cfg.path == x => {
+                    args.working_dir = vec![x];
+                    res.push(transform_files_with_args(args.clone(), config.clone())?);
+                }
+                _ => {
+                    if let Some(config) = Config::try_from_dir(&x)? {
+                        args.working_dir = vec![x];
+                        res.push(transform_files_with_args(args.clone(), Some(config))?);
+                    }
+                }
+            }
         }
-        (res, next_dirs)
+        res
     };
-    for n in next_dirs {
-        args.working_dir = vec![n];
-        res.push(transform_files_with_args(args.clone())?);
-    }
     Ok(res)
 }

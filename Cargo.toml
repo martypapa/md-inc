@@ -1,6 +1,6 @@
 [package]
 name = "md-inc"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Marty Papamanolis <marty@mindpipes.com>"]
 edition = "2018"
 description = "Include files in Markdown docs"

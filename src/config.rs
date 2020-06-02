@@ -1,10 +1,9 @@
-use crate::parse::{CommandTags};
-use std::path::PathBuf;
-use std::fs::read_to_string;
+use crate::parse::CommandTags;
+use crate::ParserConfig;
 use anyhow::Context;
 use anyhow::Result;
-use crate::ParserConfig;
-
+use std::fs::read_to_string;
+use std::path::{Path, PathBuf};
 
 pub static DEFAULT_TAG_BEGIN: &'static str = "<!--{";
 pub static DEFAULT_TAG_END: &'static str = "}-->";
@@ -13,12 +12,29 @@ pub static DEFAULT_END_COMMAND: &'static str = "end";
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Config {
+    /// The opening tag for commands
     pub open_tag: String,
+
+    /// The closing tag for commands
     pub close_tag: String,
+
+    /// The command used to end a block
     pub end_command: String,
+
+    /// Relative path of the base directory used to reference imported files
     pub base_dir: String,
+
+    /// Relative paths of files to process
     pub files: Vec<String>,
+
+    /// Relative paths of directories to process after this one
     pub next_dirs: Vec<String>,
+
+    /// Relative paths of directories to process before this one
+    pub depend_dirs: Vec<String>,
+
+    /// Relative path of output directory
+    pub out_dir: Option<String>,
 }
 
 impl Default for Config {
@@ -30,35 +46,57 @@ impl Default for Config {
             base_dir: "".to_string(),
             files: vec![],
             next_dirs: vec![],
+            depend_dirs: vec![],
+            out_dir: None,
         }
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct ConfigAndPath {
+    pub config: Config,
+    pub path: PathBuf,
+}
+
+impl ConfigAndPath {
+    pub(crate) fn parent_path(&self) -> Result<PathBuf> {
+        Ok(self
+            .path
+            .parent()
+            .context("Could not access parent directory of config file.")?
+            .to_path_buf())
+    }
+    pub(crate) fn into_parser(self) -> Result<(ParserConfig, Vec<PathBuf>)> {
+        let parent = self.parent_path()?;
+        Ok((
+            ParserConfig {
+                tags: CommandTags::new(self.config.open_tag, self.config.close_tag),
+                end_command: self.config.end_command,
+                base_dir: parent.join(self.config.base_dir),
+            },
+            self.config.files.iter().map(|x| parent.join(x)).collect(),
+        ))
+    }
+}
 impl Config {
-    pub(crate) fn try_from_path(dir: PathBuf) -> Result<Self> {
-        let file = read_to_string(dir)?;
+    pub(crate) fn try_from_path<P: AsRef<Path>>(dir: P) -> Result<Self> {
+        let file =
+            read_to_string(dir.as_ref()).with_context(|| format!("Reading {:?}", dir.as_ref()))?;
         Ok(toml::from_str::<Config>(&file)
-            .context("Error in config file")?
+            .context("Error in toml config file")?
             .into())
     }
 
-    pub(crate) fn into_parser(self, dir: &PathBuf) -> (ParserConfig, Vec<PathBuf>) {
-        (
-            ParserConfig {
-                tags: CommandTags::new(self.open_tag, self.close_tag),
-                end_command: self.end_command,
-                base_dir: dir.join(self.base_dir),
-            },
-            self.files.iter().map(|x| dir.join(x)).collect(),
-        )
-    }
     /// Returns None if no file exists
     /// Returns Some(Err) if file exists, but there was a problem reading it
-    pub(crate) fn try_from_dir<P: Into<PathBuf>>(dir: P) -> Result<Option<Self>> {
+    pub(crate) fn try_from_dir<P: Into<PathBuf>>(dir: P) -> Result<Option<ConfigAndPath>> {
         let dir = dir.into();
         let file = dir.join(".md-inc.toml");
         if file.exists() && file.is_file() {
-            Ok(Some(Config::try_from_path(file)?))
+            Ok(Some(ConfigAndPath {
+                config: Config::try_from_path(&file)?,
+                path: file,
+            }))
         } else {
             Ok(None)
         }
@@ -69,20 +107,28 @@ impl Config {
 pub struct OutputTo {
     pub read_only: bool,
     pub print: bool,
+    pub out_dir: Option<PathBuf>,
 }
 impl OutputTo {
     pub fn stdout() -> Self {
         Self {
             read_only: true,
             print: true,
+            out_dir: None,
         }
     }
     pub fn file() -> Self {
         Self {
             read_only: false,
             print: false,
+            out_dir: None,
+        }
+    }
+    pub fn different_file<P: Into<PathBuf>>(path: P) -> Self {
+        Self {
+            read_only: false,
+            print: false,
+            out_dir: Some(path.into()),
         }
     }
 }
-
-

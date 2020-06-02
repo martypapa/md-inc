@@ -1,3 +1,4 @@
+use crate::config::{DEFAULT_END_COMMAND, DEFAULT_TAG_BEGIN, DEFAULT_TAG_END};
 use anyhow::{Context, Result};
 use nom::bytes::complete::{take, take_until, take_while};
 use nom::character::complete::{none_of, space0, space1};
@@ -12,7 +13,6 @@ use nom::{
     IResult,
 };
 use std::path::PathBuf;
-use crate::config::{DEFAULT_TAG_BEGIN, DEFAULT_TAG_END, DEFAULT_END_COMMAND};
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Command<'a> {
@@ -206,7 +206,8 @@ pub(crate) fn transform<S: AsRef<str>>(input: S, command: &Command) -> Result<St
             let from_line = args
                 .get(0)
                 .map(|x| x.parse().context("Invalid 'from' line"))
-                .unwrap_or(Ok(0))?;
+                .unwrap_or(Ok(1))?
+                - 1;
             let to_line = args
                 .get(1)
                 .map(|x| x.parse().context("Invalid 'to' line"))
@@ -221,7 +222,7 @@ pub(crate) fn transform<S: AsRef<str>>(input: S, command: &Command) -> Result<St
         "line" => args
             .iter()
             .map(|x| -> Result<String> {
-                let line = x.parse::<usize>().context("Invalid line")?;
+                let line = x.parse::<usize>().context("Invalid line")? - 1;
                 Ok(input
                     .lines()
                     .skip(line)
@@ -231,18 +232,35 @@ pub(crate) fn transform<S: AsRef<str>>(input: S, command: &Command) -> Result<St
             })
             .collect::<Result<Vec<String>>>()?
             .join("\n"),
-        "before" => {
-            let value = args.get(0).context("Missing 'before' argument")?;
-            format!("{}{}", escaped(value), input)
-        }
-        "after" => {
-            let value = args.get(0).context("Missing 'after' argument")?;
-            format!("{}{}", input, escaped(value))
+        "line-numbers" => {
+            let separator = args.get(0).unwrap_or(&": ");
+            input
+                .lines()
+                .enumerate()
+                .map(|(i, x)| match i {
+                    0 => format!("{}{}{}", i + 1, separator, x),
+                    _ => format!("\n{}{}{}", i + 1, separator, x),
+                })
+                .collect::<String>()
         }
         "wrap" => {
             let before = args.get(0).context("Missing 'before' wrap argument")?;
             let after = args.get(1).unwrap_or(before);
             format!("{}{}{}", escaped(before), input, escaped(after))
+        }
+        "wrap-lines" => {
+            let before = args.get(0).context("Missing 'before' wrap argument")?;
+            let after = args.get(1).unwrap_or(before);
+            let before = escaped(before);
+            let after = escaped(after);
+            input
+                .lines()
+                .enumerate()
+                .flat_map(|(i, x)| match i {
+                    0 => vec![before.as_str(), x, after.as_str()],
+                    _ => vec!["\n", before.as_str(), x, after.as_str()],
+                })
+                .collect()
         }
         "match" => {
             let re = args.get(0).context("Missing regex string given")?.as_ref();
@@ -334,8 +352,17 @@ impl Parser {
         for (begin, end) in groups {
             let filename = begin.commands.get(0).context("No filename")?.command;
             let filename = self.config.base_dir.join(&filename);
-            let contents = std::fs::read_to_string(&filename)
-                .context(format!("Could not read: {:?}", &filename))?;
+            let contents = std::fs::read_to_string(&filename).with_context(|| {
+                let before = begin.start(&self.content);
+                let line_num = self.content[0..before].lines().count();
+
+                format!(
+                    "On line {}: Could not read '{:?}'\n  while parsing: {:?}",
+                    line_num,
+                    &filename,
+                    &self.content[begin.start(&self.content)..begin.end(&self.content)],
+                )
+            })?;
             spans.push(Span::Existing((prev_end, begin.end(&self.content))));
             let mut output = contents.trim().to_string();
             for cmd in begin.commands.iter().skip(1) {

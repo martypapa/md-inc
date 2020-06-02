@@ -2,4 +2,4 @@ files = ["README.md"]
 base_dir = "doc"
 open_tag = "<!--{{"
 close_tag = "}}-->"
-next_dirs = ["doc"]
+depend_dirs = ["doc"]
