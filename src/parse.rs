@@ -234,12 +234,17 @@ pub(crate) fn transform<S: AsRef<str>>(input: S, command: &Command) -> Result<St
             .join("\n"),
         "line-numbers" => {
             let separator = args.get(0).unwrap_or(&": ");
+            let width = args
+                .get(1)
+                .and_then(|x| x.parse::<usize>().ok())
+                .unwrap_or_else(|| input.lines().count().to_string().len());
+
             input
                 .lines()
                 .enumerate()
                 .map(|(i, x)| match i {
-                    0 => format!("{}{}{}", i + 1, separator, x),
-                    _ => format!("\n{}{}{}", i + 1, separator, x),
+                    0 => format!("{:>w$}{}{}", i + 1, separator, x, w = width),
+                    _ => format!("\n{:>w$}{}{}", i + 1, separator, x, w = width),
                 })
                 .collect::<String>()
         }

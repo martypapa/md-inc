@@ -9,4 +9,5 @@ files = [
     "before/line_list.md",
     "before/match.md",
     "before/line_numbers.md",
+    "before/line_numbers_width.md",
 ]

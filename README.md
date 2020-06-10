@@ -320,15 +320,20 @@ A
 
 
 
-### `line-numbers: [separator]`
+### `line-numbers: [separator] [width]`
 * Adds a line number to each line
 * `[separator]`: Optional separator used between the line number and the rest of the line.
     * If not provided, `: ` is used.
+* `[width]`: Optional width for line numbers.
+    * If not provided, the width of the longest line number is used.
+    
 
+**With Default Arguments:**
+    
 *Input:*
 <!--{{ "before/line_numbers.md" | code: markdown | wrap: "`" }}-->
 ````markdown
-<!--{ "alphabet.txt" | line-numbers: " " }-->
+<!--{ "full_alphabet.txt" | line-numbers | lines: 8 14 }-->
 <!--{ end }-->
 ````
 <!--{{ end }}-->
@@ -336,12 +341,38 @@ A
 *Output:*
 <!--{{ "after/line_numbers.md" | code: markdown | wrap: "`" }}-->
 ````markdown
-<!--{ "alphabet.txt" | line-numbers: " " }-->
-1 A
-2 B
-3 C
-4 D
-5 E
+<!--{ "full_alphabet.txt" | line-numbers | lines: 8 14 }-->
+ 8: H
+ 9: I
+10: J
+11: K
+12: L
+13: M
+14: N
+<!--{ end }-->
+````
+<!--{{ end }}-->
+
+
+**With Provided Arguments:**
+
+*Input:*
+<!--{{ "before/line_numbers_width.md" | code: markdown | wrap: "`" }}-->
+````markdown
+<!--{ "alphabet.txt" | line-numbers: " " 4 }-->
+<!--{ end }-->
+````
+<!--{{ end }}-->
+
+*Output:*
+<!--{{ "after/line_numbers_width.md" | code: markdown | wrap: "`" }}-->
+````markdown
+<!--{ "alphabet.txt" | line-numbers: " " 4 }-->
+   1 A
+   2 B
+   3 C
+   4 D
+   5 E
 <!--{ end }-->
 ````
 <!--{{ end }}-->

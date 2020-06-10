@@ -335,6 +335,52 @@ c"#;
 }
 
 #[test]
+fn cmd_line_numbers_width() {
+    let original = r#"a
+b
+c
+d
+e
+f
+g
+h
+i
+j
+k
+l"#;
+    let expected = r#" 1: a
+ 2: b
+ 3: c
+ 4: d
+ 5: e
+ 6: f
+ 7: g
+ 8: h
+ 9: i
+10: j
+11: k
+12: l"#;
+    let cmd = Command::new("line-numbers", vec![]);
+    let parsed = transform(original, &cmd).unwrap();
+    assert_eq!(parsed, expected);
+    let expected = r#"   1: a
+   2: b
+   3: c
+   4: d
+   5: e
+   6: f
+   7: g
+   8: h
+   9: i
+  10: j
+  11: k
+  12: l"#;
+    let cmd = Command::new("line-numbers", vec![": ", "4"]);
+    let parsed = transform(original, &cmd).unwrap();
+    assert_eq!(parsed, expected);
+}
+
+#[test]
 fn cmd_match() {
     let original = r#"
 // Comments

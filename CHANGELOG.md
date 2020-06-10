@@ -1,6 +1,10 @@
 Changelog
 =========
 
+## v0.3.1
+* Fixed line numbers to maintain consistent width.
+* Added second parameter to add custom width for line numbers.
+
 ## v0.3.0
 
 ### Breaking Changes
